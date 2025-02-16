@@ -5,10 +5,14 @@ import { CONFIG } from './config/config.js';
 import { Logger } from './utils/logger.js';
 import { VideoManager } from './video/video-manager.js';
 import { ScreenRecorder } from './video/screen-recorder.js';
+import { APIConfig } from './components/settings/APIConfig.js';
+import { ChatInterface } from './components/chat/ChatInterface.js';
+import { MediaControls } from './components/media/MediaControls.js';
+import { TabManager } from './components/TabManager.js';
 
 /**
  * @fileoverview Main entry point for the application.
- * Initializes and manages the UI, audio, video, and WebSocket interactions.
+ * Initializes and manages the components and their interactions.
  */
 
 // DOM Elements
@@ -84,6 +88,12 @@ let isUsingTool = false;
 
 // Multimodal Client
 const client = new MultimodalLiveClient();
+
+// Initialize components
+const apiConfig = new APIConfig();
+const chatInterface = new ChatInterface(client);
+const mediaControls = new MediaControls(client);
+const tabManager = new TabManager();
 
 /**
  * Logs a message to the UI.
@@ -239,207 +249,6 @@ async function resumeAudioContext() {
 }
 
 /**
- * Connects to the WebSocket server.
- * @returns {Promise<void>}
- */
-async function connectToWebsocket() {
-    if (!apiKeyInput.value) {
-        logMessage('Please input API Key', 'system');
-        return;
-    }
-
-    // Save values to localStorage
-    localStorage.setItem('gemini_api_key', apiKeyInput.value);
-    localStorage.setItem('gemini_voice', voiceSelect.value);
-    localStorage.setItem('system_instruction', systemInstructionInput.value);
-
-    const config = {
-        model: CONFIG.API.MODEL_NAME,
-        generationConfig: {
-            responseModalities: responseTypeSelect.value,
-            speechConfig: {
-                voiceConfig: { 
-                    prebuiltVoiceConfig: { 
-                        voiceName: voiceSelect.value    // You can change voice in the config.js file
-                    }
-                }
-            },
-
-        },
-        systemInstruction: {
-            parts: [{
-                text: systemInstructionInput.value     // You can change system instruction in the config.js file
-            }],
-        }
-    };  
-
-    try {
-        await client.connect(config,apiKeyInput.value);
-        isConnected = true;
-        await resumeAudioContext();
-        connectButton.textContent = 'Disconnect';
-        connectButton.classList.add('connected');
-        messageInput.disabled = false;
-        sendButton.disabled = false;
-        micButton.disabled = false;
-        cameraButton.disabled = false;
-        screenButton.disabled = false;
-        logMessage('Connected to Gemini 2.0 Flash Multimodal Live API', 'system');
-    } catch (error) {
-        const errorMessage = error.message || 'Unknown error';
-        Logger.error('Connection error:', error);
-        logMessage(`Connection error: ${errorMessage}`, 'system');
-        isConnected = false;
-        connectButton.textContent = 'Connect';
-        connectButton.classList.remove('connected');
-        messageInput.disabled = true;
-        sendButton.disabled = true;
-        micButton.disabled = true;
-        cameraButton.disabled = true;
-        screenButton.disabled = true;
-    }
-}
-
-/**
- * Disconnects from the WebSocket server.
- */
-function disconnectFromWebsocket() {
-    client.disconnect();
-    isConnected = false;
-    if (audioStreamer) {
-        audioStreamer.stop();
-        if (audioRecorder) {
-            audioRecorder.stop();
-            audioRecorder = null;
-        }
-        isRecording = false;
-        updateMicIcon();
-    }
-    connectButton.textContent = 'Connect';
-    connectButton.classList.remove('connected');
-    messageInput.disabled = true;
-    sendButton.disabled = true;
-    micButton.disabled = true;
-    cameraButton.disabled = true;
-    screenButton.disabled = true;
-    logMessage('Disconnected from server', 'system');
-    
-    if (videoManager) {
-        stopVideo();
-    }
-    
-    if (screenRecorder) {
-        stopScreenSharing();
-    }
-}
-
-/**
- * Handles sending a text message.
- */
-function handleSendMessage() {
-    const message = messageInput.value.trim();
-    if (message) {
-        logMessage(message, 'user');
-        client.send({ text: message });
-        messageInput.value = '';
-    }
-}
-
-// Event Listeners
-client.on('open', () => {
-    logMessage('WebSocket connection opened', 'system');
-});
-
-client.on('log', (log) => {
-    logMessage(`${log.type}: ${JSON.stringify(log.message)}`, 'system');
-});
-
-client.on('close', (event) => {
-    logMessage(`WebSocket connection closed (code ${event.code})`, 'system');
-});
-
-client.on('audio', async (data) => {
-    try {
-        await resumeAudioContext();
-        const streamer = await ensureAudioInitialized();
-        streamer.addPCM16(new Uint8Array(data));
-    } catch (error) {
-        logMessage(`Error processing audio: ${error.message}`, 'system');
-    }
-});
-
-client.on('content', (data) => {
-    if (data.modelTurn) {
-        if (data.modelTurn.parts.some(part => part.functionCall)) {
-            isUsingTool = true;
-            Logger.info('Model is using a tool');
-        } else if (data.modelTurn.parts.some(part => part.functionResponse)) {
-            isUsingTool = false;
-            Logger.info('Tool usage completed');
-        }
-
-        const text = data.modelTurn.parts.map(part => part.text).join('');
-        if (text) {
-            logMessage(text, 'ai');
-        }
-    }
-});
-
-client.on('interrupted', () => {
-    audioStreamer?.stop();
-    isUsingTool = false;
-    Logger.info('Model interrupted');
-    logMessage('Model interrupted', 'system');
-});
-
-client.on('setupcomplete', () => {
-    logMessage('Setup complete', 'system');
-});
-
-client.on('turncomplete', () => {
-    isUsingTool = false;
-    logMessage('Turn complete', 'system');
-});
-
-client.on('error', (error) => {
-    if (error instanceof ApplicationError) {
-        Logger.error(`Application error: ${error.message}`, error);
-    } else {
-        Logger.error('Unexpected error', error);
-    }
-    logMessage(`Error: ${error.message}`, 'system');
-});
-
-client.on('message', (message) => {
-    if (message.error) {
-        Logger.error('Server error:', message.error);
-        logMessage(`Server error: ${message.error}`, 'system');
-    }
-});
-
-sendButton.addEventListener('click', handleSendMessage);
-messageInput.addEventListener('keypress', (event) => {
-    if (event.key === 'Enter') {
-        handleSendMessage();
-    }
-});
-
-micButton.addEventListener('click', handleMicToggle);
-
-connectButton.addEventListener('click', () => {
-    if (isConnected) {
-        disconnectFromWebsocket();
-    } else {
-        connectToWebsocket();
-    }
-});
-
-messageInput.disabled = true;
-sendButton.disabled = true;
-micButton.disabled = true;
-connectButton.textContent = 'Connect';
-
-/**
  * Handles the video toggle. Starts or stops video streaming.
  * @returns {Promise<void>}
  */
@@ -555,4 +364,156 @@ function stopScreenSharing() {
 
 screenButton.addEventListener('click', handleScreenShare);
 screenButton.disabled = true;
+
+class App {
+    constructor() {
+        this.client = new MultimodalLiveClient();
+        this.isConnected = false;
+        this.isUsingTool = false;
+
+        // Initialize components
+        this.apiConfig = new APIConfig();
+        this.chatInterface = new ChatInterface(this.client);
+        this.mediaControls = new MediaControls(this.client);
+        this.tabManager = new TabManager();
+
+        this.setupEventListeners();
+    }
+
+    setupEventListeners() {
+        // Connect button
+        this.apiConfig.connectButton.addEventListener('click', () => {
+            if (this.isConnected) {
+                this.disconnect();
+            } else {
+                this.connect();
+            }
+        });
+
+        // Client events
+        this.client.on('open', () => {
+            Logger.info('WebSocket connection opened');
+        });
+
+        this.client.on('close', (event) => {
+            Logger.info(`WebSocket connection closed (code ${event.code})`);
+            this.handleDisconnect();
+        });
+
+        this.client.on('error', (error) => {
+            Logger.error('WebSocket error:', error);
+            this.handleDisconnect();
+        });
+
+        this.client.on('audio', async (data) => {
+            await this.mediaControls.processAudioOutput(data);
+        });
+
+        this.client.on('content', (data) => {
+            if (data.modelTurn) {
+                if (data.modelTurn.parts.some(part => part.functionCall)) {
+                    this.isUsingTool = true;
+                    Logger.info('Model is using a tool');
+                } else if (data.modelTurn.parts.some(part => part.functionResponse)) {
+                    this.isUsingTool = false;
+                    Logger.info('Tool usage completed');
+                }
+
+                const text = data.modelTurn.parts.map(part => part.text).join('');
+                if (text) {
+                    this.chatInterface.addMessage(text, 'ai');
+                }
+            }
+        });
+
+        this.client.on('interrupted', () => {
+            this.mediaControls.audioStreamer?.stop();
+            this.isUsingTool = false;
+            Logger.info('Model interrupted');
+        });
+    }
+
+    async connect() {
+        const apiKey = this.apiConfig.getAPIKey();
+        if (!apiKey) {
+            Logger.error('API key is required');
+            return;
+        }
+
+        const config = {
+            model: CONFIG.API.MODEL_NAME,
+            generationConfig: {
+                responseModalities: responseTypeSelect.value,
+                speechConfig: {
+                    voiceConfig: { 
+                        prebuiltVoiceConfig: { 
+                            voiceName: voiceSelect.value
+                        }
+                    }
+                },
+            },
+            systemInstruction: {
+                parts: [{
+                    text: systemInstructionInput.value
+                }],
+            }
+        };
+
+        try {
+            await this.client.connect(config, apiKey);
+            this.isConnected = true;
+            this.apiConfig.setConnectionState(true);
+            this.chatInterface.setEnabled(true);
+            this.mediaControls.setEnabled(true);
+            Logger.info('Connected to Gemini API');
+        } catch (error) {
+            Logger.error('Connection error:', error);
+            this.handleDisconnect();
+        }
+    }
+
+    disconnect() {
+        this.client.disconnect();
+        this.handleDisconnect();
+    }
+
+    handleDisconnect() {
+        this.isConnected = false;
+        this.apiConfig.setConnectionState(false);
+        this.chatInterface.setEnabled(false);
+        this.mediaControls.setEnabled(false);
+        Logger.info('Disconnected from server');
+    }
+}
+
+// Initialize the application
+const app = new App();
+
+// Event Listeners
+client.on('log', (log) => {
+    logMessage(`${log.type}: ${JSON.stringify(log.message)}`, 'system');
+});
+
+client.on('message', (message) => {
+    if (message.error) {
+        Logger.error('Server error:', message.error);
+        logMessage(`Server error: ${message.error}`, 'system');
+    }
+});
+
+sendButton.addEventListener('click', () => {
+    const message = messageInput.value.trim();
+    if (message) {
+        logMessage(message, 'user');
+        client.send({ text: message });
+        messageInput.value = '';
+    }
+});
+
+micButton.addEventListener('click', handleMicToggle);
+
+messageInput.disabled = true;
+sendButton.disabled = true;
+micButton.disabled = true;
+connectButton.textContent = 'Connect';
   
