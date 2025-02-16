@@ -96,18 +96,23 @@ async function serveStaticFile(req: Request): Promise<Response> {
   }
 
   filePath = join('src/static', filePath.replace(/^\//, ''));
+  console.log('Attempting to serve file:', filePath);
 
   try {
     const file = await Deno.readFile(filePath);
+    const contentType = getContentType(filePath);
+    console.log('Successfully serving file:', filePath, 'with content-type:', contentType);
     return new Response(file, {
       headers: {
-        'content-type': getContentType(filePath),
+        'content-type': contentType,
       },
     });
   } catch (e) {
     if (e instanceof Deno.errors.NotFound) {
+      console.error('File not found:', filePath);
       return new Response('404 Not Found', { status: 404 });
     }
+    console.error('Error serving file:', filePath, e);
     return new Response('500 Internal Server Error', { status: 500 });
   }
 }
