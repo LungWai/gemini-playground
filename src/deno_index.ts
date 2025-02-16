@@ -1,3 +1,6 @@
+import { serve } from "https://deno.land/std/http/server.ts";
+import { join } from "https://deno.land/std/path/mod.ts";
+
 const getContentType = (path: string): string => {
   const ext = path.split('.').pop()?.toLowerCase() || '';
   const types: Record<string, string> = {
@@ -84,12 +87,36 @@ async function handleAPIRequest(req: Request): Promise<Response> {
   }
 }
 
+async function serveStaticFile(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let filePath = url.pathname;
+  
+  if (filePath === '/') {
+    filePath = '/index.html';
+  }
+
+  filePath = join('src/static', filePath.replace(/^\//, ''));
+
+  try {
+    const file = await Deno.readFile(filePath);
+    return new Response(file, {
+      headers: {
+        'content-type': getContentType(filePath),
+      },
+    });
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) {
+      return new Response('404 Not Found', { status: 404 });
+    }
+    return new Response('500 Internal Server Error', { status: 500 });
+  }
+}
+
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   console.log('Request URL:', req.url);
 
-  // WebSocket 处理
-  if (req.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+  if (req.headers.get('upgrade') === 'websocket') {
     return handleWebSocket(req);
   }
 
@@ -99,32 +126,13 @@ async function handleRequest(req: Request): Promise<Response> {
     return handleAPIRequest(req);
   }
 
-  // 静态文件处理
-  try {
-    let filePath = url.pathname;
-    if (filePath === '/' || filePath === '/index.html') {
-      filePath = '/index.html';
-    }
-
-    const fullPath = `${Deno.cwd()}/src/static${filePath}`;
-
-    const file = await Deno.readFile(fullPath);
-    const contentType = getContentType(filePath);
-
-    return new Response(file, {
-      headers: {
-        'content-type': `${contentType};charset=UTF-8`,
-      },
-    });
-  } catch (e) {
-    console.error('Error details:', e);
-    return new Response('Not Found', { 
-      status: 404,
-      headers: {
-        'content-type': 'text/plain;charset=UTF-8',
-      }
-    });
+  if (url.pathname.startsWith('/api/')) {
+    return new Response('API not implemented', { status: 501 });
   }
+
+  return serveStaticFile(req);
 }
 
-Deno.serve(handleRequest); 
+const port = 8000;
+console.log(`Server running at http://localhost:${port}`);
+serve(handleRequest, { port }); 
